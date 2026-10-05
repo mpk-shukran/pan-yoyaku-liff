@@ -518,17 +518,19 @@ function showDone(result) {
   $('d-pickup').textContent = pendingOrder.date + ' ' + pendingOrder.time;
   $('d-detail').textContent = result ? result.detail : detailLines();
   $('d-total').textContent = (result ? result.total : total()).toLocaleString() + '円';
+  // ご案内の届け先(LINEで送れなかったときはメール。どちらにも送れなかったときは空)
+  const via = !result || result.notifiedBy === '' ? '' : result.notifiedBy === 'mail' ? 'メール' : 'LINE';
   let msg;
   if (!result) {
     msg = 'ご予約は受け付けましたが、ご案内の送信に時間がかかっています。お店から改めてご連絡いたします。';
   } else if (result.paymentUrl) {
     msg = '下のボタンからお支払いください(期限:' + result.paymentDeadline + ')。\n' +
-      'お支払いの確認をもってご予約確定となります。同じ内容をLINEにもお送りしました。';
+      'お支払いの確認をもってご予約確定となります。' + (via ? '同じ内容を' + via + 'にもお送りしました。' : '');
     $('d-pay').href = result.paymentUrl;
   } else if (result.paymentFailed) {
     msg = 'お支払いのご案内を、のちほど別のメッセージでお送りします。少々お待ちください。';
   } else {
-    msg = 'ご予約内容をLINEにお送りしました。ご来店をお待ちしております。';
+    msg = (via ? 'ご予約内容を' + via + 'にお送りしました。' : 'ご予約を受け付けました。') + 'ご来店をお待ちしております。';
   }
   $('d-msg').textContent = msg;
   show('d-pay', !!(result && result.paymentUrl));
@@ -563,21 +565,21 @@ function reloginTried(value) {
   }
 }
 
-// 本人確認の有効期限が切れたときは、ログインし直す(LINEアプリ内では開き直してもらう)。
-// ログインし直しても通らないときは、繰り返さずに止める
+// 本人確認の有効期限が切れたときは、本人確認を取り直す(1回だけ)。
+// 取り直しても通らないときは、繰り返さずに止める
 function relogin(message) {
-  if (liff.isInClient()) {
-    fatal(message || '画面を開いてから時間がたったため、受付できませんでした。いったん閉じて、もう一度開き直してください。');
-    return;
-  }
   if (reloginTried()) {
     reloginTried(false);
-    fatal(message || 'LINEの本人確認ができませんでした。時間をおいて、もう一度開き直してください。');
+    fatal(message || (liff.isInClient()
+      ? '画面を開いてから時間がたったため、受付できませんでした。いったん閉じて、もう一度開き直してください。'
+      : 'LINEの本人確認ができませんでした。時間をおいて、もう一度開き直してください。'));
     return;
   }
   reloginTried(true);
   liff.logout();
-  liff.login({ redirectUri: location.href });
+  // LINEアプリ内では、古い本人確認を捨てて読み込み直すと新しいものが発行される
+  if (liff.isInClient()) location.reload();
+  else liff.login({ redirectUri: location.href });
 }
 
 async function start() {
