@@ -81,12 +81,17 @@
 </head>
 <body>
 <main>
-  <div id="loading" class="center">読み込み中です…</div>
+  <div id="loading" class="center">
+    <div id="loading-text">ご予約画面を準備しています…</div>
+    <div id="loading-note" class="hint"></div>
+    <button type="button" class="btn sub" id="retry" style="max-width:260px;margin:16px auto 0" hidden>もう一度読み込む</button>
+  </div>
 
   <!-- 入力画面 -->
   <div id="view-form" hidden>
     <div class="shop" id="shop"></div>
     <h1>パンのご予約</h1>
+    <div id="sync" class="hint" hidden></div>
     <div id="demo" class="msg warn" hidden>確認用の表示です(この画面からは予約を送信できません)。</div>
     <div id="friend" class="msg warn" hidden></div>
     <div id="error" class="msg err" hidden></div>
@@ -142,6 +147,7 @@
     <div style="margin-top:14px">
       <button type="button" class="btn" id="submit">この内容で予約する</button>
       <button type="button" class="btn sub" id="back">内容を修正する</button>
+      <p class="hint" id="submit-note" style="margin:12px 0 0;text-align:center" hidden></p>
     </div>
   </div>
 
@@ -166,7 +172,7 @@
 <div class="bar" id="bar" hidden>
   <div class="inner">
     <div class="total">合計<b id="total">0円</b></div>
-    <button type="button" class="btn" id="to-confirm">確認画面へ</button>
+    <button type="button" class="btn" id="to-confirm" disabled>準備しています…</button>
   </div>
 </div>
 
@@ -180,12 +186,29 @@ const LIFF_ID = '2011869942-9NBWAr1f';
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbwCixMH4oZEVufd9Sp1HvKHFOlt6fv1W-P020G4NC43hKEo73pGaPqALx-8_GjTAs0YSQ/exec';
 // ===== 設定ここまで =====
 
+// 表示・通信の調整値(通常は変更不要)。Google側の応答が時々十数秒〜数十秒に伸びるため、
+// 前回の商品情報を先に表示したり、返事が遅いときに同じ問い合わせを重ねたりしている
+const CATALOG_CACHE_KEY = 'pan.catalogCache.v1';        // 前回の商品情報を端末に控えておく名前(お客様の情報は入れない)
+const CATALOG_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;   // 前回の商品情報を先に表示してよい期間
+const HEDGE_AFTER_MS = 7000;           // 読み込みの返事がこれより遅いときは、同じ問い合わせをもう1回重ねて送る
+const LOAD_TIMEOUT_MS = 45000;         // 読み込みの返事がこれを過ぎたら、失敗として案内する
+const STALE_OK_AFTER_MS = 15000;       // 最新の商品情報が届かなくても、前回の分のまま確認画面へ進めるまでの時間
+const SUBMIT_HEDGE_AFTER_MS = 18000;   // 予約の送信の返事がこれより遅いときは、同じ送信番号でもう1回送る(二重には受け付けない)
+const SUBMIT_TIMEOUT_MS = 90000;       // 予約の送信の返事がこれを過ぎたら、通信失敗として案内する
+const SUBMIT_SLOW_NOTE_MS = 12000;     // 送信中がこれより長いときは、案内の文を変える
+
 // URLの末尾に ?demo=1 を付けて開くと、LINEなしで画面の見た目だけ確認できる(予約の送信は不可)
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 
-let catalog = null;   // 商品・受取日・残数・受取時間の規則(毎回GASから受け取る)
-let profile = null;   // 登録済みのお名前など(LINEの本人確認後に受け取る)
+let catalog = null;   // 商品・受取日・残数・受取時間の規則(GASから受け取る。前回の分を先に使うこともある)
+let profile = null;   // 登録済みのお名前など(LINEの本人確認後に受け取る。届くまでは null)
 let idToken = '';
+let currentView = 'loading';   // いま表示している画面(loading / form / confirm / done)
+let fatalShown = false;        // 読み込めずに案内を出しているか
+let freshCatalog = false;      // 最新の商品情報を受け取ったか(前回の保存分だけを表示しているときは false)
+let tokenReady = false;        // LINEの本人確認(IDトークン)を受け取ったか
+let staleOk = false;           // 最新の商品情報を待ちきれず、前回の分のまま確認画面へ進めてよいか
+let navigating = false;        // LINEのログインのやり直しなどで、画面が切り替わる最中か
 const state = { date: '', time: '', items: {}, slices: {} };  // items: 商品名→個数、slices: 商品名→切り方の配列
 
 const $ = function (id) { return document.getElementById(id); };
@@ -198,17 +221,44 @@ const el = function (tag, className, text) {
 const show = function (id, on) { $(id).hidden = !on; };
 
 function showView(name) {
+  currentView = name;
   ['form', 'confirm', 'done'].forEach(function (v) { show('view-' + v, v === name); });
   show('loading', false);
   show('bar', name === 'form');
   window.scrollTo(0, 0);
 }
 
+// 読み込みの途中(まだ入力画面を出していない間)だけ、入力画面に切り替える
+function showFormIfLoading() {
+  if (currentView === 'loading' && !fatalShown) showView('form');
+}
+
 function fatal(message) {
-  $('loading').textContent = message;
+  fatalShown = true;
+  currentView = 'loading';
+  $('loading-text').textContent = message;
+  $('loading-note').textContent = '';
+  show('retry', true);
   show('loading', true);
   ['form', 'confirm', 'done'].forEach(function (v) { show('view-' + v, false); });
   show('bar', false);
+}
+
+// 読み込みが長いときに、止まっていないことを伝える
+function watchLoading() {
+  const note = function (text) {
+    return function () {
+      if (currentView === 'loading' && !fatalShown) $('loading-note').textContent = text;
+    };
+  };
+  setTimeout(note('少し時間がかかっています。そのままお待ちください。'), 6000);
+  setTimeout(note('混み合っているようです。自動でやり直しています。もうしばらくお待ちください。'), 20000);
+}
+
+// 入力画面の上の小さな案内(空にすると消える)
+function setSync(message) {
+  $('sync').textContent = message || '';
+  show('sync', !!message);
 }
 
 function setError(id, message) {
@@ -217,14 +267,106 @@ function setError(id, message) {
   if (message) $(id).scrollIntoView({ block: 'center' });
 }
 
-// GASへの問い合わせ(Content-Type を text/plain にして、事前確認の通信が発生しないようにしている)
-async function callGas(body) {
-  const res = await fetch(GAS_URL, {
+// GASへの1回の問い合わせ。返ってきたJSONを渡す(JSONでない返事・通信エラーは失敗になる)。
+// POST は Content-Type を text/plain にして、事前確認の通信が発生しないようにしている
+function postGas(body, signal) {
+  return fetch(GAS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body),
+    signal: signal,
+  }).then(function (res) { return res.json(); });
+}
+
+function getGas(signal) {
+  return fetch(GAS_URL, { signal: signal }).then(function (res) { return res.json(); });
+}
+
+// 同じ問い合わせを、返事が遅いとき(hedgeAfterMs)や通信エラーのときに1回だけ重ねて送り、
+// 先に「受け入れられる」返事(accept が true)が届いた方を使う。Google側の待ちが時々十数秒〜数十秒に
+// 伸びるための対策。読み取りだけの問い合わせと、送信番号で二重受付を防いでいる予約の送信にだけ使う。
+// 受け入れられる返事がないまま、すべての問い合わせが終わった(または timeoutMs が過ぎた)ときは、
+// 最後に届いた返事を渡す(1つも届いていなければ失敗にする)
+function sendHedged(send, accept, hedgeAfterMs, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    const controllers = [];
+    let started = 0;
+    let running = 0;
+    let finished = false;
+    let lastResponse = null;
+    let hedgeTimer = null;
+    let deadlineTimer = null;
+
+    function finish(ok, value) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(hedgeTimer);
+      clearTimeout(deadlineTimer);
+      controllers.forEach(function (c) { try { c.abort(); } catch (err) { /* 中断できなくても問題ない */ } });
+      if (ok) resolve(value); else reject(value);
+    }
+    function giveUp(err) {
+      if (lastResponse) finish(true, lastResponse); else finish(false, err);
+    }
+    function launch() {
+      if (finished || started >= 2) return;
+      started++;
+      running++;
+      let controller = null;
+      try { controller = new AbortController(); } catch (err) { controller = null; }
+      if (controller) controllers.push(controller);
+      send(controller ? controller.signal : undefined).then(function (response) {
+        running--;
+        if (finished) return;
+        if (accept(response)) { finish(true, response); return; }
+        lastResponse = response;
+        if (running === 0) giveUp(null);  // 受け入れられない返事(エラーの案内など)だけで、待っている問い合わせもない
+      }, function (err) {
+        running--;
+        if (finished) return;
+        if (started < 2) { launch(); return; }  // 通信エラー:すぐにもう1回送る
+        if (running === 0) giveUp(err);
+      });
+    }
+
+    launch();
+    hedgeTimer = setTimeout(launch, hedgeAfterMs);
+    deadlineTimer = setTimeout(function () { giveUp(new Error('timeout')); }, timeoutMs);
   });
-  return res.json();
+}
+
+// ----- 前回の商品情報(端末に控えておき、次に開くときに先に表示する) -----
+// 商品・価格・受取日・残数・受取時間の規則だけで、お客様の情報は入れない。
+// 残数などが古くても、予約の送信時にGAS側が必ず確かめ直す
+
+function parseDateLabel(label) {  // 「2026年10月7日(水)」→ その日の0時。読めなければ null
+  const m = /^(\d+)年(\d+)月(\d+)日/.exec(String(label));
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+}
+
+function loadCachedCatalog() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CATALOG_CACHE_KEY) || 'null');
+    if (!saved || !saved.catalog || !Array.isArray(saved.catalog.dates) || !Array.isArray(saved.catalog.products)) return null;
+    if (!(Date.now() - saved.savedAt <= CATALOG_CACHE_MAX_AGE_MS)) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    saved.catalog.dates = saved.catalog.dates.filter(function (d) {
+      const day = parseDateLabel(d.label);
+      return day && day >= today;  // 日がたって過ぎた受取日は外す
+    });
+    return saved.catalog.dates.length > 0 ? saved.catalog : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function saveCatalog(next) {
+  try { localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), catalog: next })); } catch (err) { /* 保存できなくても動作には影響しない */ }
+}
+
+function clearCatalogCache() {
+  try { localStorage.removeItem(CATALOG_CACHE_KEY); } catch (err) { /* 同上 */ }
 }
 
 // ----- 注文内容から決まるもの -----
@@ -389,10 +531,18 @@ function render() {
   $('total').textContent = total().toLocaleString() + '円';
 }
 
+// 入力欄が空のところだけ、登録済みの内容を入れる(本人情報は商品情報より遅れて届くことがあり、
+// お客様が先に入力し始めていても上書きしない)
+function fillIfEmpty(id, value) {
+  const input = $(id);
+  if (value && !input.value) input.value = value;
+}
+
 function applyProfile() {
-  $('name').value = profile.name || '';
-  $('phone').value = profile.phone || '';
-  $('email').value = profile.email || '';
+  if (!profile) return;
+  fillIfEmpty('name', profile.name);
+  fillIfEmpty('phone', profile.phone);
+  fillIfEmpty('email', profile.email);
   $('email-label').textContent = profile.isFriend
     ? 'メールアドレス(任意)'
     : 'メールアドレス(友だち追加がお済みでない場合は必須)';
@@ -401,7 +551,7 @@ function applyProfile() {
   if (!profile.isFriend) {
     friend.appendChild(document.createTextNode(
       'ご予約の確認やお支払いのご案内はLINEでお送りします。公式アカウントを友だち追加してからご予約ください。'));
-    if (catalog.friendUrl) {
+    if (catalog && catalog.friendUrl) {
       friend.appendChild(document.createTextNode(' '));
       const a = el('a', '', '友だち追加はこちら');
       a.href = catalog.friendUrl;
@@ -416,6 +566,25 @@ function applyCatalog(next) {
   catalog = next;
   $('shop').textContent = catalog.shopName;
   $('notes').textContent = catalog.notes;
+}
+
+// 最新の商品情報を受け取ったとき(読み込み・本人情報の返事・送信エラーの返事のどれからでも)
+function receiveFreshCatalog(next) {
+  applyCatalog(next);
+  saveCatalog(next);
+  freshCatalog = true;
+  render();
+  showFormIfLoading();
+  setSync('');
+  updateButtons();
+}
+
+// 「確認画面へ」は、入力に必要な情報(商品情報・LINEの本人確認)がそろってから押せる
+function updateButtons() {
+  const ready = !!catalog && tokenReady && (freshCatalog || staleOk);
+  const button = $('to-confirm');
+  button.disabled = !ready;
+  button.textContent = ready ? '確認画面へ' : '準備しています…';
 }
 
 // ----- 入力の読み取りと送信 -----
@@ -488,33 +657,53 @@ function toConfirm() {
 
 async function submitOrder() {
   if (!pendingOrder || DEMO) return;
+  const order = pendingOrder;
   const button = $('submit');
+  const note = $('submit-note');
   button.disabled = true;
+  $('back').disabled = true;
   button.textContent = '送信中です…';
-  let res;
+  note.textContent = 'ご予約を送信しています。LINEにご案内が届いても、この画面が切り替わるまでそのままお待ちください。';
+  show('submit-note', true);
+  const slowTimer = setTimeout(function () {
+    note.textContent = '混み合っていて時間がかかっています。LINEにご案内が届いていれば、ご予約は受け付け済みです。このままお待ちください。';
+  }, SUBMIT_SLOW_NOTE_MS);
+
+  let res = null;
   try {
-    res = await callGas({ action: 'reserve', idToken: idToken, order: pendingOrder });
+    // 送信番号(requestId)で二重受付を防いでいるため、返事が遅いときは同じ内容をもう1回送り、先に返った方を使う
+    res = await sendHedged(
+      function (signal) { return postGas({ action: 'reserve', idToken: idToken, order: order }, signal); },
+      function (r) { return !!r && (r.ok === true || r.error === 'duplicate'); },
+      SUBMIT_HEDGE_AFTER_MS, SUBMIT_TIMEOUT_MS);
   } catch (err) {
-    // 通信が切れただけで、予約は届いている場合がある。同じ番号のまま送り直せるようにしておく
-    button.disabled = false;
-    button.textContent = 'この内容で予約する';
-    setError('confirm-error', '通信に失敗しました。電波の良いところでもう一度お試しください。');
+    res = null;
+  }
+  clearTimeout(slowTimer);
+  button.disabled = false;
+  $('back').disabled = false;
+  button.textContent = 'この内容で予約する';
+  show('submit-note', false);
+
+  if (!res) {
+    // 通信が切れただけで、予約は届いている場合がある。同じ番号のまま送り直せる(二重には受け付けない)
+    setError('confirm-error', '通信に失敗しました。LINEにご案内が届いていれば、ご予約は受け付け済みです。' +
+      '届いていないときは、電波の良いところでもう一度「この内容で予約する」を押してください(二重には受け付けません)。');
     return;
   }
-  button.disabled = false;
-  button.textContent = 'この内容で予約する';
-
   if (res.ok) { showDone(res.result); return; }
+  if (res.error === 'duplicate') { showDone(null, true); return; }  // すでに受け付け済み(返事が遅れて重ねて送った・押し直したとき)
   if (res.error === 'auth') { relogin(); return; }
-  if (res.error === 'duplicate' || res.error === 'busy') { setError('confirm-error', res.message); return; }
+  if (res.error === 'busy') { setError('confirm-error', res.message); return; }
   // 売り切れ・締切など:最新の残数を反映して入力画面に戻す
-  if (res.catalog) applyCatalog(res.catalog);
-  render();
+  if (res.catalog) receiveFreshCatalog(res.catalog); else render();
   showView('form');
   setError('error', res.message || 'エラーが発生しました。もう一度お試しください。');
 }
 
-function showDone(result) {
+// result がないのは、すでに受け付け済みと分かったが詳しい返事は受け取れていないとき
+// (viaDuplicate は、重ねて送った・押し直した送信が「受け付け済み」と返ってきた場合)
+function showDone(result, viaDuplicate) {
   $('d-pickup').textContent = pendingOrder.date + ' ' + pendingOrder.time;
   $('d-detail').textContent = result ? result.detail : detailLines();
   $('d-total').textContent = (result ? result.total : total()).toLocaleString() + '円';
@@ -522,7 +711,9 @@ function showDone(result) {
   const via = !result || result.notifiedBy === '' ? '' : result.notifiedBy === 'mail' ? 'メール' : 'LINE';
   let msg;
   if (!result) {
-    msg = 'ご予約は受け付けましたが、ご案内の送信に時間がかかっています。お店から改めてご連絡いたします。';
+    msg = viaDuplicate
+      ? 'ご予約は受け付けました。ご案内をLINEにお送りしています(届かない場合は、お店からご連絡いたします)。'
+      : 'ご予約は受け付けましたが、ご案内の送信に時間がかかっています。お店から改めてご連絡いたします。';
   } else if (result.paymentUrl) {
     msg = '下のボタンからお支払いください(期限:' + result.paymentDeadline + ')。\n' +
       'お支払いの確認をもってご予約確定となります。' + (via ? '同じ内容を' + via + 'にもお送りしました。' : '');
@@ -576,45 +767,94 @@ function relogin(message) {
     return;
   }
   reloginTried(true);
+  navigating = true;
   liff.logout();
   // LINEアプリ内では、古い本人確認を捨てて読み込み直すと新しいものが発行される
   if (liff.isInClient()) location.reload();
   else liff.login({ redirectUri: location.href });
 }
 
+// LINEの本人確認と、本人情報(登録済みのお名前など)の取得。商品情報の読み込みとは並行して進める。
+// 失敗しても例外にはせず、必要な案内を出して戻る。戻り値は、本人情報だけ取れなかったときに true
+async function loginAndLoadProfile() {
+  try {
+    await liff.init({ liffId: LIFF_ID });
+  } catch (err) {
+    fatal('読み込みに失敗しました。電波の良いところで開き直してください。');
+    return false;
+  }
+  if (!liff.isLoggedIn()) { navigating = true; liff.login({ redirectUri: location.href }); return false; }
+  const decoded = liff.getDecodedIDToken();
+  if (!decoded || decoded.exp * 1000 < Date.now()) { relogin(); return false; }
+  idToken = liff.getIDToken();
+  tokenReady = true;
+  updateButtons();
+
+  let res = null;
+  try {
+    res = await sendHedged(
+      function (signal) { return postGas({ action: 'init', idToken: idToken }, signal); },
+      function (r) { return !!(r && r.ok); }, HEDGE_AFTER_MS, LOAD_TIMEOUT_MS);
+  } catch (err) {
+    res = null;
+  }
+  if (res && res.ok) {
+    reloginTried(false);
+    profile = res.profile;
+    if (res.catalog && !freshCatalog) receiveFreshCatalog(res.catalog);
+    applyProfile();
+    return false;
+  }
+  if (res && res.error === 'auth') { relogin(res.message); return false; }
+  return true;  // 本人情報だけ取れなかった(商品情報があれば、ご予約は続けられる。送信時にGASが本人確認をする)
+}
+
 async function start() {
   if (!GAS_URL || (!DEMO && !LIFF_ID)) { fatal('設定(LIFF_ID・GAS_URL)がまだ入っていません。'); return; }
+  watchLoading();
+
+  // 前回の商品情報が端末に残っていれば、先に表示する(最新の情報は、並行して取りに行く)
+  const cached = DEMO ? null : loadCachedCatalog();
+  if (cached) {
+    try {
+      applyCatalog(cached);
+      render();
+      showView('form');
+      setSync('最新の受付状況を確認しています…');
+      setTimeout(function () { staleOk = true; updateButtons(); }, STALE_OK_AFTER_MS);
+    } catch (err) {
+      clearCatalogCache();  // 形式が合わない古い保存分は使わない
+      catalog = null;
+    }
+  }
+  updateButtons();
+
   try {
+    // 最新の商品情報(公開情報)は、LINEの本人確認を待たずにすぐ取りに行く
+    const catalogTask = sendHedged(getGas, function (r) { return !!(r && r.ok && r.catalog); }, HEDGE_AFTER_MS, LOAD_TIMEOUT_MS)
+      .then(function (r) {
+        if (r && r.ok && r.catalog) receiveFreshCatalog(r.catalog);
+      }, function () { /* 取れなかった。本人情報の返事で届くかもしれないので、ここでは止めない */ });
+
     if (DEMO) {
-      const res = await (await fetch(GAS_URL)).json();
-      applyCatalog(res.catalog);
       profile = { isFriend: true, lastOrder: null };
+      tokenReady = true;
       show('demo', true);
+      await catalogTask;
+      applyProfile();
     } else {
-      await liff.init({ liffId: LIFF_ID });
-      if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
-      const decoded = liff.getDecodedIDToken();
-      if (!decoded || decoded.exp * 1000 < Date.now()) { relogin(); return; }
-      idToken = liff.getIDToken();
-      const res = await callGas({ action: 'init', idToken: idToken });
-      if (!res.ok) {
-        if (res.error === 'auth') { relogin(res.message); return; }
-        fatal(res.message || '読み込みに失敗しました。時間をおいてもう一度お試しください。');
-        return;
-      }
-      reloginTried(false);
-      applyCatalog(res.catalog);
-      profile = res.profile;
+      const profileFailed = await Promise.all([catalogTask, loginAndLoadProfile()]).then(function (r) { return r[1]; });
+      if (navigating || fatalShown) return;
+      if (profileFailed && catalog) setSync('お客様情報を読み込めませんでした。お名前などをご入力ください(ご予約は続けられます)。');
     }
   } catch (err) {
     fatal('読み込みに失敗しました。電波の良いところで開き直してください。');
     return;
   }
-  applyProfile();
-  render();
-  showView('form');
+  if (!catalog && !fatalShown) fatal('読み込みに失敗しました。電波の良いところで、もう一度お試しください。');
 }
 
+$('retry').addEventListener('click', function () { location.reload(); });
 $('to-confirm').addEventListener('click', toConfirm);
 $('submit').addEventListener('click', submitOrder);
 $('back').addEventListener('click', function () { showView('form'); });
