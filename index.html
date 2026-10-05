@@ -165,6 +165,7 @@
     <div style="margin-top:14px">
       <a class="btn" id="d-pay" target="_blank" rel="noopener" hidden>お支払いへ進む</a>
       <button type="button" class="btn sub" id="close">閉じる</button>
+      <p class="hint" id="close-note" style="margin:12px 0 0;text-align:center" hidden></p>
     </div>
   </div>
 </main>
@@ -196,6 +197,7 @@ const STALE_OK_AFTER_MS = 15000;       // 最新の商品情報が届かなく�
 const SUBMIT_HEDGE_AFTER_MS = 18000;   // 予約の送信の返事がこれより遅いときは、同じ送信番号でもう1回送る(二重には受け付けない)
 const SUBMIT_TIMEOUT_MS = 90000;       // 予約の送信の返事がこれを過ぎたら、通信失敗として案内する
 const SUBMIT_SLOW_NOTE_MS = 12000;     // 送信中がこれより長いときは、案内の文を変える
+const CLOSE_NOTE_AFTER_MS = 700;       // 「閉じる」を押してもこれだけ画面が残っていたら、閉じられなかった案内を出す
 
 // URLの末尾に ?demo=1 を付けて開くと、LINEなしで画面の見た目だけ確認できる(予約の送信は不可)
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
@@ -859,9 +861,21 @@ $('to-confirm').addEventListener('click', toConfirm);
 $('submit').addEventListener('click', submitOrder);
 $('back').addEventListener('click', function () { showView('form'); });
 $('reorder').addEventListener('click', applyLastOrder);
+// 画面を閉じる。LINEの中ならLINEの機能で、それ以外のブラウザは window.close() を試す。
+// どちらも使えない環境(外部ブラウザで開いたとき、LINEの機能が効かないときなど)では何も起きないため、
+// 閉じなかったときは案内を出す(ご予約はすでに受け付け済み)
 $('close').addEventListener('click', function () {
-  if (window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow();
-  else window.close();
+  let inClient = false;
+  try { inClient = !!(window.liff && liff.isInClient && liff.isInClient()); } catch (err) { /* 判定できなければ外部ブラウザ扱い */ }
+  try {
+    if (inClient) liff.closeWindow(); else window.close();
+  } catch (err) { /* 下の案内に任せる */ }
+  setTimeout(function () {
+    $('close-note').textContent = inClient
+      ? 'ご予約は受け付け済みです。画面を閉じられないときは、画面の左上(または右上)の「×」「←」でお戻りください。'
+      : 'ご予約は受け付け済みです。このブラウザでは画面を閉じられません。LINEのアプリに戻るか、この画面(タブ)を閉じてください。';
+    show('close-note', true);
+  }, CLOSE_NOTE_AFTER_MS);
 });
 start();
 </script>
