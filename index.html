@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>パンのご予約</title>
+<style>
+  :root {
+    --bg: #faf6ef; --card: #ffffff; --text: #3b2f25; --sub: #7a6a5c; --line: #e6dccd;
+    --accent: #b5651d; --accent-text: #ffffff; --warn-bg: #fff4d6; --warn: #8a5a00;
+    --err-bg: #fde8e6; --err: #a3271b; --off: #b9ada0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Yu Gothic", sans-serif;
+    font-size: 16px; line-height: 1.6; -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 560px; margin: 0 auto; padding: 16px 16px calc(96px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  .shop { color: var(--sub); font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 14px; }
+  .notes { white-space: pre-wrap; font-size: 13px; color: var(--sub); margin: 0; }
+  .msg { border-radius: 10px; padding: 10px 12px; margin-top: 14px; font-size: 14px; white-space: pre-wrap; }
+  .msg.warn { background: var(--warn-bg); color: var(--warn); }
+  .msg.err { background: var(--err-bg); color: var(--err); }
+  .msg a { color: inherit; font-weight: bold; }
+  label.field { display: block; font-size: 13px; color: var(--sub); margin-top: 10px; }
+  label.field:first-of-type { margin-top: 0; }
+  input[type=text], input[type=tel], input[type=email], select {
+    width: 100%; font-size: 16px; padding: 10px; margin-top: 4px; color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; background: #fff;
+  }
+  .choices { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .choice {
+    font-size: 15px; padding: 10px 6px; border: 1px solid var(--line); border-radius: 8px;
+    background: #fff; color: var(--text); text-align: center;
+  }
+  .choice[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: bold; }
+  .product { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .product:first-of-type { border-top: 0; }
+  .product .info { flex: 1; min-width: 0; }
+  .product .name { font-size: 15px; }
+  .product .price { font-size: 13px; color: var(--sub); }
+  .product .note { font-size: 12px; color: var(--warn); }
+  .product.off .name, .product.off .price { color: var(--off); }
+  .stepper { display: flex; align-items: center; gap: 6px; flex: none; }
+  .stepper button {
+    width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--accent);
+    background: #fff; color: var(--accent); font-size: 20px; line-height: 1; padding: 0;
+  }
+  .stepper button:disabled { border-color: var(--line); color: var(--off); }
+  .stepper .qty { width: 22px; text-align: center; font-variant-numeric: tabular-nums; }
+  .slice-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .slice-row span { flex: none; width: 52px; font-size: 14px; }
+  .slice-row select { margin-top: 0; }
+  .slice-name { font-size: 14px; margin-top: 12px; }
+  .slice-name:first-of-type { margin-top: 0; }
+  .hint { font-size: 13px; color: var(--sub); margin: 0 0 8px; }
+  .btn {
+    display: block; width: 100%; font-size: 16px; font-weight: bold; padding: 13px; border-radius: 10px;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); text-align: center; text-decoration: none;
+  }
+  .btn.sub { background: #fff; color: var(--accent); margin-top: 10px; }
+  .btn:disabled { background: var(--off); border-color: var(--off); }
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  }
+  .bar .inner { max-width: 560px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
+  .bar .total { flex: none; font-size: 13px; color: var(--sub); }
+  .bar .total b { display: block; font-size: 18px; color: var(--text); font-variant-numeric: tabular-nums; }
+  dl { margin: 0; }
+  dt { font-size: 13px; color: var(--sub); margin-top: 10px; }
+  dt:first-child { margin-top: 0; }
+  dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .center { text-align: center; padding: 48px 0; color: var(--sub); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div id="loading" class="center">読み込み中です…</div>
+
+  <!-- 入力画面 -->
+  <div id="view-form" hidden>
+    <div class="shop" id="shop"></div>
+    <h1>パンのご予約</h1>
+    <div id="demo" class="msg warn" hidden>確認用の表示です(この画面からは予約を送信できません)。</div>
+    <div id="friend" class="msg warn" hidden></div>
+    <div id="error" class="msg err" hidden></div>
+    <div class="card"><p class="notes" id="notes"></p></div>
+
+    <div class="card">
+      <h2>お客様情報</h2>
+      <label class="field">お名前<input type="text" id="name" autocomplete="name" maxlength="50"></label>
+      <label class="field">電話番号(当日ご連絡が取れる番号)<input type="tel" id="phone" autocomplete="tel" maxlength="20" placeholder="090-1234-5678"></label>
+      <label class="field"><span id="email-label">メールアドレス(任意)</span><input type="email" id="email" autocomplete="email" maxlength="100"></label>
+      <p class="hint" style="margin:10px 0 0">ご入力いただいた情報は、ご予約の受付・ご連絡・お店のサービス向上に利用します。</p>
+    </div>
+
+    <div class="card">
+      <h2>受取日</h2>
+      <div class="choices" id="dates"></div>
+    </div>
+
+    <div class="card">
+      <h2>商品</h2>
+      <button type="button" class="btn sub" id="reorder" style="margin:0 0 10px" hidden>前回と同じ内容にする</button>
+      <div id="products"></div>
+    </div>
+
+    <div class="card" id="slice-card" hidden>
+      <h2>スライス</h2>
+      <p class="hint">1本ごとに切り方をお選びいただけます。</p>
+      <div id="slices"></div>
+    </div>
+
+    <div class="card">
+      <h2>受取時間</h2>
+      <p class="hint" id="time-hint"></p>
+      <div class="choices" id="times"></div>
+    </div>
+  </div>
+
+  <!-- 確認画面 -->
+  <div id="view-confirm" hidden>
+    <h1>ご予約内容の確認</h1>
+    <div id="confirm-error" class="msg err" hidden></div>
+    <div class="card">
+      <dl>
+        <dt>お名前</dt><dd id="c-name"></dd>
+        <dt>電話番号</dt><dd id="c-phone"></dd>
+        <dt>メールアドレス</dt><dd id="c-email"></dd>
+        <dt>お受け取り</dt><dd id="c-pickup"></dd>
+        <dt>ご注文内容</dt><dd id="c-detail"></dd>
+        <dt>合計</dt><dd id="c-total"></dd>
+      </dl>
+    </div>
+    <div class="card"><p class="notes" id="c-pay"></p></div>
+    <div style="margin-top:14px">
+      <button type="button" class="btn" id="submit">この内容で予約する</button>
+      <button type="button" class="btn sub" id="back">内容を修正する</button>
+    </div>
+  </div>
+
+  <!-- 完了画面 -->
+  <div id="view-done" hidden>
+    <h1>ご予約を受け付けました</h1>
+    <div class="card">
+      <dl>
+        <dt>お受け取り</dt><dd id="d-pickup"></dd>
+        <dt>ご注文内容</dt><dd id="d-detail"></dd>
+        <dt>合計</dt><dd id="d-total"></dd>
+      </dl>
+    </div>
+    <div class="msg warn" id="d-msg"></div>
+    <div style="margin-top:14px">
+      <a class="btn" id="d-pay" target="_blank" rel="noopener" hidden>お支払いへ進む</a>
+      <button type="button" class="btn sub" id="close">閉じる</button>
+    </div>
+  </div>
+</main>
+
+<div class="bar" id="bar" hidden>
+  <div class="inner">
+    <div class="total">合計<b id="total">0円</b></div>
+    <button type="button" class="btn" id="to-confirm">確認画面へ</button>
+  </div>
+</div>
+
+<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script>
+// ===== 設定(ここだけ書き換えます) =====
+// LIFF_ID:LINE Developers の「LIFF」タブに表示されるLIFF ID(例:1234567890-AbCdEfGh)
+// GAS_URL:Apps Script を「ウェブアプリ」として公開したときのURL(…/exec で終わるもの)
+// どちらも、見られても問題のない値です(パスワードやトークンはここには書きません)
+const LIFF_ID = '2011869942-9NBWAr1f';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwCixMH4oZEVufd9Sp1HvKHFOlt6fv1W-P020G4NC43hKEo73pGaPqALx-8_GjTAs0YSQ/exec';
+// ===== 設定ここまで =====
+
+// URLの末尾に ?demo=1 を付けて開くと、LINEなしで画面の見た目だけ確認できる(予約の送信は不可)
+const DEMO = new URLSearchParams(location.search).get('demo') === '1';
+
+let catalog = null;   // 商品・受取日・残数・受取時間の規則(毎回GASから受け取る)
+let profile = null;   // 登録済みのお名前など(LINEの本人確認後に受け取る)
+let idToken = '';
+const state = { date: '', time: '', items: {}, slices: {} };  // items: 商品名→個数、slices: 商品名→切り方の配列
+
+const $ = function (id) { return document.getElementById(id); };
+const el = function (tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+const show = function (id, on) { $(id).hidden = !on; };
+
+function showView(name) {
+  ['form', 'confirm', 'done'].forEach(function (v) { show('view-' + v, v === name); });
+  show('loading', false);
+  show('bar', name === 'form');
+  window.scrollTo(0, 0);
+}
+
+function fatal(message) {
+  $('loading').textContent = message;
+  show('loading', true);
+  ['form', 'confirm', 'done'].forEach(function (v) { show('view-' + v, false); });
+  show('bar', false);
+}
+
+function setError(id, message) {
+  $(id).textContent = message || '';
+  show(id, !!message);
+  if (message) $(id).scrollIntoView({ block: 'center' });
+}
+
+// GASへの問い合わせ(Content-Type を text/plain にして、事前確認の通信が発生しないようにしている)
+async function callGas(body) {
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+// ----- 注文内容から決まるもの -----
+
+const qtyOf = function (name) { return state.items[name] || 0; };
+const slicedOf = function (name) {
+  return (state.slices[name] || []).slice(0, qtyOf(name))
+    .filter(function (c) { return c !== catalog.noSlice; }).length;
+};
+const dateInfo = function () {
+  return catalog.dates.filter(function (d) { return d.label === state.date; })[0] || null;
+};
+
+// 選んだ受取日でその商品を何個まで選べるか({ max, note })
+function availability(p) {
+  const d = dateInfo();
+  if (!d) return { max: catalog.maxQty, note: '' };
+  if (p.closedWeekdays.indexOf(d.weekday) !== -1) {
+    return { max: 0, note: catalog.weekdayLabels[d.weekday] + '曜日はお取り扱いがありません' };
+  }
+  const left = (catalog.remaining[d.label] || {})[p.name];
+  if (left === undefined) return { max: catalog.maxQty, note: '' };
+  if (left <= 0) return { max: 0, note: 'この日は売り切れです' };
+  return { max: Math.min(catalog.maxQty, left), note: left <= 3 ? '残り' + left + p.unit : '' };
+}
+
+// 選べる受取時間(GAS側の linePickupRule と同じ規則。送信時にGAS側でも確認される)
+function pickupTimes() {
+  if (catalog.timingProduct && qtyOf(catalog.timingProduct) > 0) {
+    return slicedOf(catalog.timingProduct) > 0 ? catalog.times.slice : catalog.times.bread;
+  }
+  for (let i = catalog.timeGroups.length - 1; i >= 0; i--) {
+    const g = catalog.timeGroups[i];
+    if (!g.products.some(function (n) { return qtyOf(n) > 0; })) continue;
+    if (g.sliceTimes && g.products.some(function (n) { return slicedOf(n) > 0; })) return g.sliceTimes;
+    return g.times;
+  }
+  return catalog.times.general;
+}
+
+function total() {
+  return catalog.products.reduce(function (sum, p) { return sum + p.price * qtyOf(p.name); }, 0);
+}
+
+function detailLines() {
+  const lines = [];
+  catalog.products.forEach(function (p) {
+    const qty = qtyOf(p.name);
+    if (qty === 0) return;
+    lines.push('・' + p.name + ' × ' + qty + p.unit + ' … ' + p.price * qty + '円');
+    if (p.sliceOptions && slicedOf(p.name) > 0) {
+      lines.push('  スライス:' + state.slices[p.name].slice(0, qty)
+        .map(function (c, i) { return (i + 1) + '本目=' + c; }).join('、'));
+    }
+  });
+  return lines.join('\n');
+}
+
+// 受取日や残数が変わったあと、選べなくなった個数・切り方・受取時間を直す
+function normalize() {
+  catalog.products.forEach(function (p) {
+    const max = availability(p).max;
+    if (qtyOf(p.name) > max) state.items[p.name] = max;
+    if (!p.sliceOptions) return;
+    const list = (state.slices[p.name] || []).slice(0, qtyOf(p.name)).map(function (c) {
+      return c === catalog.noSlice || p.sliceOptions.indexOf(c) !== -1 ? c : catalog.noSlice;
+    });
+    while (list.length < qtyOf(p.name)) list.push(catalog.noSlice);
+    state.slices[p.name] = list;
+  });
+  if (catalog.dates.every(function (d) { return d.label !== state.date; })) state.date = '';
+  if (pickupTimes().indexOf(state.time) === -1) state.time = '';
+}
+
+// ----- 画面の描画 -----
+
+function renderChoices(id, values, selected, onPick) {
+  const box = $(id);
+  box.textContent = '';
+  values.forEach(function (v) {
+    const b = el('button', 'choice', v.text);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(v.value === selected));
+    b.addEventListener('click', function () { onPick(v.value); });
+    box.appendChild(b);
+  });
+}
+
+function render() {
+  normalize();
+
+  renderChoices('dates',
+    catalog.dates.map(function (d) { return { value: d.label, text: d.label.replace(/^\d+年/, '') }; }),
+    state.date, function (v) { state.date = v; render(); });
+  if (catalog.dates.length === 0) $('dates').textContent = 'ただいまご予約いただける日がありません。';
+
+  const box = $('products');
+  box.textContent = '';
+  catalog.products.forEach(function (p) {
+    const a = availability(p);
+    const qty = qtyOf(p.name);
+    const row = el('div', 'product' + (a.max === 0 ? ' off' : ''));
+    const info = el('div', 'info');
+    info.appendChild(el('div', 'name', p.name));
+    info.appendChild(el('div', 'price', p.price + '円'));
+    if (a.note) info.appendChild(el('div', 'note', a.note));
+    else if (qty > 0 && p.help) info.appendChild(el('div', 'price', p.help));
+    row.appendChild(info);
+
+    const stepper = el('div', 'stepper');
+    const minus = el('button', '', '−');
+    minus.type = 'button';
+    minus.disabled = qty === 0;
+    minus.setAttribute('aria-label', p.name + 'を1つ減らす');
+    minus.addEventListener('click', function () { state.items[p.name] = qty - 1; render(); });
+    const plus = el('button', '', '+');
+    plus.type = 'button';
+    plus.disabled = qty >= a.max;
+    plus.setAttribute('aria-label', p.name + 'を1つ増やす');
+    plus.addEventListener('click', function () { state.items[p.name] = qty + 1; render(); });
+    stepper.appendChild(minus);
+    stepper.appendChild(el('span', 'qty', String(qty)));
+    stepper.appendChild(plus);
+    row.appendChild(stepper);
+    box.appendChild(row);
+  });
+
+  // スライス(対応商品を注文したときだけ)
+  const sliceBox = $('slices');
+  sliceBox.textContent = '';
+  let anySlice = false;
+  catalog.products.forEach(function (p) {
+    if (!p.sliceOptions || qtyOf(p.name) === 0) return;
+    anySlice = true;
+    sliceBox.appendChild(el('div', 'slice-name', p.name));
+    state.slices[p.name].forEach(function (choice, i) {
+      const row = el('div', 'slice-row');
+      row.appendChild(el('span', '', (i + 1) + '本目'));
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', p.name + ' ' + (i + 1) + '本目の切り方');
+      [catalog.noSlice].concat(p.sliceOptions).forEach(function (o) {
+        const opt = el('option', '', o);
+        opt.value = o;
+        opt.selected = o === choice;
+        select.appendChild(opt);
+      });
+      select.addEventListener('change', function () { state.slices[p.name][i] = select.value; render(); });
+      row.appendChild(select);
+      sliceBox.appendChild(row);
+    });
+  });
+  show('slice-card', anySlice);
+
+  const times = pickupTimes();
+  $('time-hint').textContent = times[0] === catalog.times.general[0]
+    ? ''
+    : 'ご注文の内容により、お受け取りは' + times[0].split('〜')[0] + '以降となります。';
+  renderChoices('times',
+    times.map(function (t) { return { value: t, text: t }; }),
+    state.time, function (v) { state.time = v; render(); });
+
+  $('total').textContent = total().toLocaleString() + '円';
+}
+
+function applyProfile() {
+  $('name').value = profile.name || '';
+  $('phone').value = profile.phone || '';
+  $('email').value = profile.email || '';
+  $('email-label').textContent = profile.isFriend
+    ? 'メールアドレス(任意)'
+    : 'メールアドレス(友だち追加がお済みでない場合は必須)';
+  const friend = $('friend');
+  friend.textContent = '';
+  if (!profile.isFriend) {
+    friend.appendChild(document.createTextNode(
+      'ご予約の確認やお支払いのご案内はLINEでお送りします。公式アカウントを友だち追加してからご予約ください。'));
+    if (catalog.friendUrl) {
+      friend.appendChild(document.createTextNode(' '));
+      const a = el('a', '', '友だち追加はこちら');
+      a.href = catalog.friendUrl;
+      friend.appendChild(a);
+    }
+  }
+  show('friend', !profile.isFriend);
+  show('reorder', !!(profile.lastOrder && profile.lastOrder.items));
+}
+
+function applyCatalog(next) {
+  catalog = next;
+  $('shop').textContent = catalog.shopName;
+  $('notes').textContent = catalog.notes;
+}
+
+// ----- 入力の読み取りと送信 -----
+
+// 全角の数字・記号を半角にそろえる(電話番号用)
+function normalizePhone(v) {
+  return v.trim()
+    .replace(/[０-９（）＋]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+    .replace(/[ー－―‐−]/g, '-')
+    .replace(/　/g, ' ');
+}
+
+function readOrder() {
+  const items = {};
+  const slices = {};
+  catalog.products.forEach(function (p) {
+    const qty = qtyOf(p.name);
+    if (qty === 0) return;
+    items[p.name] = qty;
+    if (p.sliceOptions) slices[p.name] = state.slices[p.name].slice(0, qty);
+  });
+  return {
+    name: $('name').value.trim(),
+    phone: normalizePhone($('phone').value),
+    email: $('email').value.trim(),
+    date: state.date,
+    time: state.time,
+    items: items,
+    slices: slices,
+  };
+}
+
+function checkOrder(order) {
+  if (!order.name) return 'お名前をご入力ください。';
+  if (!/^[0-9+\-() ]{9,20}$/.test(order.phone)) return '電話番号を正しくご入力ください。';
+  if (order.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email)) return 'メールアドレスを正しくご入力ください。';
+  if (!order.email && profile && !profile.isFriend) {
+    return '友だち追加がお済みでない場合は、ご連絡用にメールアドレスをご入力ください。';
+  }
+  if (!order.date) return '受取日をお選びください。';
+  if (Object.keys(order.items).length === 0) return '商品をお選びください。';
+  if (!order.time) return '受取時間をお選びください。';
+  return '';
+}
+
+let pendingOrder = null;
+
+function toConfirm() {
+  const order = readOrder();
+  const problem = checkOrder(order);
+  if (problem) { setError('error', problem); return; }
+  setError('error', '');
+  setError('confirm-error', '');
+  // 同じ確認画面からの送信が2回届いても1回分しか受け付けないための番号
+  order.requestId = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  pendingOrder = order;
+  $('c-name').textContent = order.name + ' 様';
+  $('c-phone').textContent = order.phone;
+  $('c-email').textContent = order.email || '(なし)';
+  $('c-pickup').textContent = order.date + ' ' + order.time;
+  $('c-detail').textContent = detailLines();
+  $('c-total').textContent = total().toLocaleString() + '円';
+  $('c-pay').textContent = catalog.payment.enabled
+    ? 'ご予約後、LINEにお支払いリンクをお送りします。' + catalog.payment.deadlineHours +
+      '時間以内のお支払いをもってご予約確定となります。'
+    : 'お支払いはお受け取り時に店頭にてお願いいたします。';
+  $('submit').disabled = DEMO;
+  showView('confirm');
+}
+
+async function submitOrder() {
+  if (!pendingOrder || DEMO) return;
+  const button = $('submit');
+  button.disabled = true;
+  button.textContent = '送信中です…';
+  let res;
+  try {
+    res = await callGas({ action: 'reserve', idToken: idToken, order: pendingOrder });
+  } catch (err) {
+    // 通信が切れただけで、予約は届いている場合がある。同じ番号のまま送り直せるようにしておく
+    button.disabled = false;
+    button.textContent = 'この内容で予約する';
+    setError('confirm-error', '通信に失敗しました。電波の良いところでもう一度お試しください。');
+    return;
+  }
+  button.disabled = false;
+  button.textContent = 'この内容で予約する';
+
+  if (res.ok) { showDone(res.result); return; }
+  if (res.error === 'auth') { relogin(); return; }
+  if (res.error === 'duplicate' || res.error === 'busy') { setError('confirm-error', res.message); return; }
+  // 売り切れ・締切など:最新の残数を反映して入力画面に戻す
+  if (res.catalog) applyCatalog(res.catalog);
+  render();
+  showView('form');
+  setError('error', res.message || 'エラーが発生しました。もう一度お試しください。');
+}
+
+function showDone(result) {
+  $('d-pickup').textContent = pendingOrder.date + ' ' + pendingOrder.time;
+  $('d-detail').textContent = result ? result.detail : detailLines();
+  $('d-total').textContent = (result ? result.total : total()).toLocaleString() + '円';
+  let msg;
+  if (!result) {
+    msg = 'ご予約は受け付けましたが、ご案内の送信に時間がかかっています。お店から改めてご連絡いたします。';
+  } else if (result.paymentUrl) {
+    msg = '下のボタンからお支払いください(期限:' + result.paymentDeadline + ')。\n' +
+      'お支払いの確認をもってご予約確定となります。同じ内容をLINEにもお送りしました。';
+    $('d-pay').href = result.paymentUrl;
+  } else if (result.paymentFailed) {
+    msg = 'お支払いのご案内を、のちほど別のメッセージでお送りします。少々お待ちください。';
+  } else {
+    msg = 'ご予約内容をLINEにお送りしました。ご来店をお待ちしております。';
+  }
+  $('d-msg').textContent = msg;
+  show('d-pay', !!(result && result.paymentUrl));
+  pendingOrder = null;
+  showView('done');
+}
+
+function applyLastOrder() {
+  const last = profile.lastOrder;
+  state.items = {};
+  state.slices = {};
+  catalog.products.forEach(function (p) {
+    const qty = Number(last.items[p.name]) || 0;
+    if (qty > 0) state.items[p.name] = Math.min(qty, catalog.maxQty);
+    if (last.slices && Array.isArray(last.slices[p.name])) state.slices[p.name] = last.slices[p.name].slice();
+  });
+  state.time = '';
+  render();
+  setError('error', state.date ? '' : '前回の内容を入れました。受取日と受取時間をお選びください。');
+}
+
+// 本人確認の有効期限が切れたときは、ログインし直す(LINEアプリ内では開き直してもらう)
+function relogin() {
+  if (liff.isInClient()) {
+    fatal('画面を開いてから時間がたったため、受付できませんでした。いったん閉じて、もう一度開き直してください。');
+    return;
+  }
+  liff.logout();
+  liff.login({ redirectUri: location.href });
+}
+
+async function start() {
+  if (!GAS_URL || (!DEMO && !LIFF_ID)) { fatal('設定(LIFF_ID・GAS_URL)がまだ入っていません。'); return; }
+  try {
+    if (DEMO) {
+      const res = await (await fetch(GAS_URL)).json();
+      applyCatalog(res.catalog);
+      profile = { isFriend: true, lastOrder: null };
+      show('demo', true);
+    } else {
+      await liff.init({ liffId: LIFF_ID });
+      if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return; }
+      const decoded = liff.getDecodedIDToken();
+      if (!decoded || decoded.exp * 1000 < Date.now()) { relogin(); return; }
+      idToken = liff.getIDToken();
+      const res = await callGas({ action: 'init', idToken: idToken });
+      if (!res.ok) {
+        if (res.error === 'auth') { relogin(); return; }
+        fatal(res.message || '読み込みに失敗しました。時間をおいてもう一度お試しください。');
+        return;
+      }
+      applyCatalog(res.catalog);
+      profile = res.profile;
+    }
+  } catch (err) {
+    fatal('読み込みに失敗しました。電波の良いところで開き直してください。');
+    return;
+  }
+  applyProfile();
+  render();
+  showView('form');
+}
+
+$('to-confirm').addEventListener('click', toConfirm);
+$('submit').addEventListener('click', submitOrder);
+$('back').addEventListener('click', function () { showView('form'); });
+$('reorder').addEventListener('click', applyLastOrder);
+$('close').addEventListener('click', function () {
+  if (window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow();
+  else window.close();
+});
+start();
+</script>
+</body>
+</html>
