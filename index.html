@@ -550,12 +550,32 @@ function applyLastOrder() {
   setError('error', state.date ? '' : '前回の内容を入れました。受取日と受取時間をお選びください。');
 }
 
-// 本人確認の有効期限が切れたときは、ログインし直す(LINEアプリ内では開き直してもらう)
-function relogin() {
+// ログインし直しを試した印(sessionStorage が使えない環境では、繰り返しを避けるため試した扱いにする)
+const RELOGIN_KEY = 'reloginTried';
+function reloginTried(value) {
+  try {
+    if (value === undefined) return sessionStorage.getItem(RELOGIN_KEY) === '1';
+    if (value) sessionStorage.setItem(RELOGIN_KEY, '1');
+    else sessionStorage.removeItem(RELOGIN_KEY);
+    return false;
+  } catch (err) {
+    return true;
+  }
+}
+
+// 本人確認の有効期限が切れたときは、ログインし直す(LINEアプリ内では開き直してもらう)。
+// ログインし直しても通らないときは、繰り返さずに止める
+function relogin(message) {
   if (liff.isInClient()) {
-    fatal('画面を開いてから時間がたったため、受付できませんでした。いったん閉じて、もう一度開き直してください。');
+    fatal(message || '画面を開いてから時間がたったため、受付できませんでした。いったん閉じて、もう一度開き直してください。');
     return;
   }
+  if (reloginTried()) {
+    reloginTried(false);
+    fatal(message || 'LINEの本人確認ができませんでした。時間をおいて、もう一度開き直してください。');
+    return;
+  }
+  reloginTried(true);
   liff.logout();
   liff.login({ redirectUri: location.href });
 }
@@ -576,10 +596,11 @@ async function start() {
       idToken = liff.getIDToken();
       const res = await callGas({ action: 'init', idToken: idToken });
       if (!res.ok) {
-        if (res.error === 'auth') { relogin(); return; }
+        if (res.error === 'auth') { relogin(res.message); return; }
         fatal(res.message || '読み込みに失敗しました。時間をおいてもう一度お試しください。');
         return;
       }
+      reloginTried(false);
       applyCatalog(res.catalog);
       profile = res.profile;
     }
