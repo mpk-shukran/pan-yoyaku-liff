@@ -197,7 +197,7 @@ const STALE_OK_AFTER_MS = 15000;       // 最新の商品情報が届かなく�
 const SUBMIT_HEDGE_AFTER_MS = 18000;   // 予約の送信の返事がこれより遅いときは、同じ送信番号でもう1回送る(二重には受け付けない)
 const SUBMIT_TIMEOUT_MS = 90000;       // 予約の送信の返事がこれを過ぎたら、通信失敗として案内する
 const SUBMIT_SLOW_NOTE_MS = 12000;     // 送信中がこれより長いときは、案内の文を変える
-const CLOSE_NOTE_AFTER_MS = 700;       // 「閉じる」を押してもこれだけ画面が残っていたら、閉じられなかった案内を出す
+const CLOSE_NOTE_AFTER_MS = 1500;      // 「閉じる」を押してもこれだけ画面が残っていたら、閉じられなかった案内を出す(LINEの閉じる処理は0.7秒以上かかることがある)
 
 // URLの末尾に ?demo=1 を付けて開くと、LINEなしで画面の見た目だけ確認できる(予約の送信は不可)
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
