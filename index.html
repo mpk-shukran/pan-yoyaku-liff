@@ -28,7 +28,7 @@
   .msg a { color: inherit; font-weight: bold; }
   label.field { display: block; font-size: 13px; color: var(--sub); margin-top: 10px; }
   label.field:first-of-type { margin-top: 0; }
-  input[type=text], input[type=tel], input[type=email], select {
+  input[type=text], input[type=tel], select {
     width: 100%; font-size: 16px; padding: 10px; margin-top: 4px; color: var(--text);
     border: 1px solid var(--line); border-radius: 8px; background: #fff;
   }
@@ -101,7 +101,6 @@
       <h2>お客様情報</h2>
       <label class="field">お名前<input type="text" id="name" autocomplete="name" maxlength="50"></label>
       <label class="field">電話番号(当日ご連絡が取れる番号)<input type="tel" id="phone" autocomplete="tel" maxlength="20" placeholder="090-1234-5678"></label>
-      <label class="field"><span id="email-label">メールアドレス(任意)</span><input type="email" id="email" autocomplete="email" maxlength="100"></label>
       <p class="hint" style="margin:10px 0 0">ご入力いただいた情報は、ご予約の受付・ご連絡・お店のサービス向上に利用します。</p>
     </div>
 
@@ -137,7 +136,6 @@
       <dl>
         <dt>お名前</dt><dd id="c-name"></dd>
         <dt>電話番号</dt><dd id="c-phone"></dd>
-        <dt>メールアドレス</dt><dd id="c-email"></dd>
         <dt>お受け取り</dt><dd id="c-pickup"></dd>
         <dt>ご注文内容</dt><dd id="c-detail"></dd>
         <dt>合計</dt><dd id="c-total"></dd>
@@ -544,24 +542,55 @@ function applyProfile() {
   if (!profile) return;
   fillIfEmpty('name', profile.name);
   fillIfEmpty('phone', profile.phone);
-  fillIfEmpty('email', profile.email);
-  $('email-label').textContent = profile.isFriend
-    ? 'メールアドレス(任意)'
-    : 'メールアドレス(友だち追加がお済みでない場合は必須)';
   const friend = $('friend');
   friend.textContent = '';
   if (!profile.isFriend) {
+    // ご予約の確認・お支払いのご案内はLINEでしか送れないため、友だちでない方は予約できない
     friend.appendChild(document.createTextNode(
-      'ご予約の確認やお支払いのご案内はLINEでお送りします。公式アカウントを友だち追加してからご予約ください。'));
+      'ご予約には、LINE公式アカウントの友だち追加が必要です(ご予約の確認・お支払いのご案内をLINEでお送りします)。'));
     if (catalog && catalog.friendUrl) {
       friend.appendChild(document.createTextNode(' '));
       const a = el('a', '', '友だち追加はこちら');
       a.href = catalog.friendUrl;
       friend.appendChild(a);
     }
+    const again = el('button', 'btn sub', '友だち追加が済んだら、ここを押してください');
+    again.type = 'button';
+    again.addEventListener('click', function () { recheckFriend(false); });
+    friend.appendChild(again);
   }
   show('friend', !profile.isFriend);
   show('reorder', !!(profile.lastOrder && profile.lastOrder.items));
+}
+
+// 友だちかどうかを確かめ直す(友だち追加を済ませて戻ってきたとき、画面の情報は古いままのため)。
+// 友だちと確認できたら true。quiet が true のときは、確認できなくても案内を出さない(自動の確認用)
+let rechecking = false;
+async function recheckFriend(quiet) {
+  if (DEMO || rechecking) return !!(profile && profile.isFriend);
+  rechecking = true;
+  const button = $('friend').querySelector('button');
+  if (button) { button.disabled = true; button.textContent = '確認しています…'; }
+  let res = null;
+  try {
+    res = await sendHedged(
+      function (signal) { return postGas({ action: 'init', idToken: idToken }, signal); },
+      function (r) { return !!(r && r.ok); }, HEDGE_AFTER_MS, LOAD_TIMEOUT_MS);
+  } catch (err) {
+    res = null;
+  }
+  rechecking = false;
+  if (res && res.ok) {
+    profile = res.profile;
+    applyProfile();
+    if (profile.isFriend) { setError('error', ''); return true; }
+    if (!quiet) setError('error', '友だち追加がまだ確認できませんでした。友だち追加をしてから、もう一度押してください(追加した直後は、反映に少し時間がかかることがあります)。');
+    return false;
+  }
+  if (res && res.error === 'auth') { relogin(res.message); return false; }
+  applyProfile();  // ボタンを押せる状態に戻す
+  if (!quiet) setError('error', '友だち追加を確認できませんでした。電波の良いところで、もう一度お試しください。');
+  return false;
 }
 
 function applyCatalog(next) {
@@ -576,6 +605,7 @@ function receiveFreshCatalog(next) {
   saveCatalog(next);
   freshCatalog = true;
   render();
+  if (profile) applyProfile();  // 友だち追加のリンク先(friendUrl)は商品情報に入っているため、あとから届いた分も反映する
   showFormIfLoading();
   setSync('');
   updateButtons();
@@ -611,7 +641,6 @@ function readOrder() {
   return {
     name: $('name').value.trim(),
     phone: normalizePhone($('phone').value),
-    email: $('email').value.trim(),
     date: state.date,
     time: state.time,
     items: items,
@@ -622,10 +651,6 @@ function readOrder() {
 function checkOrder(order) {
   if (!order.name) return 'お名前をご入力ください。';
   if (!/^[0-9+\-() ]{9,20}$/.test(order.phone)) return '電話番号を正しくご入力ください。';
-  if (order.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email)) return 'メールアドレスを正しくご入力ください。';
-  if (!order.email && profile && !profile.isFriend) {
-    return '友だち追加がお済みでない場合は、ご連絡用にメールアドレスをご入力ください。';
-  }
   if (!order.date) return '受取日をお選びください。';
   if (Object.keys(order.items).length === 0) return '商品をお選びください。';
   if (!order.time) return '受取時間をお選びください。';
@@ -634,7 +659,16 @@ function checkOrder(order) {
 
 let pendingOrder = null;
 
-function toConfirm() {
+async function toConfirm() {
+  if (profile && !profile.isFriend) {
+    // 友だち追加を済ませて戻ってきた直後かもしれないので、先に確かめ直す(確認できなければ案内が出る)
+    const button = $('to-confirm');
+    button.disabled = true;
+    button.textContent = '友だち追加を確認しています…';
+    const isFriend = await recheckFriend(false);
+    updateButtons();
+    if (!isFriend) return;
+  }
   const order = readOrder();
   const problem = checkOrder(order);
   if (problem) { setError('error', problem); return; }
@@ -645,7 +679,6 @@ function toConfirm() {
   pendingOrder = order;
   $('c-name').textContent = order.name + ' 様';
   $('c-phone').textContent = order.phone;
-  $('c-email').textContent = order.email || '(なし)';
   $('c-pickup').textContent = order.date + ' ' + order.time;
   $('c-detail').textContent = detailLines();
   $('c-total').textContent = total().toLocaleString() + '円';
@@ -697,6 +730,14 @@ async function submitOrder() {
   if (res.error === 'duplicate') { showDone(null, true); return; }  // すでに受け付け済み(返事が遅れて重ねて送った・押し直したとき)
   if (res.error === 'auth') { relogin(); return; }
   if (res.error === 'busy') { setError('confirm-error', res.message); return; }
+  if (res.error === 'not_friend') {
+    // 画面を開いたときは友だちだった(または本人情報を読めなかった)が、送信時には友だちでなかった
+    profile = Object.assign({ name: '', phone: '', lastOrder: null }, profile, { isFriend: false });
+    applyProfile();
+    showView('form');
+    setError('error', res.message);
+    return;
+  }
   // 売り切れ・締切など:最新の残数を反映して入力画面に戻す
   if (res.catalog) receiveFreshCatalog(res.catalog); else render();
   showView('form');
@@ -857,6 +898,10 @@ async function start() {
 }
 
 $('retry').addEventListener('click', function () { location.reload(); });
+// 友だち追加のためにLINEの別の画面へ移ってから戻ったときは、自動で確かめ直す
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible' && currentView === 'form' && profile && !profile.isFriend) recheckFriend(true);
+});
 $('to-confirm').addEventListener('click', toConfirm);
 $('submit').addEventListener('click', submitOrder);
 $('back').addEventListener('click', function () { showView('form'); });
