@@ -100,8 +100,7 @@
     <div class="card">
       <h2>お客様情報</h2>
       <label class="field">お名前<input type="text" id="name" autocomplete="name" maxlength="50"></label>
-      <label class="field">電話番号(当日ご連絡が取れる番号)<input type="tel" id="phone" autocomplete="tel" maxlength="20" placeholder="090-1234-5678"></label>
-      <p class="hint" style="margin:10px 0 0">ご入力いただいたお名前・電話番号とLINEの情報は、ご予約の受付・お受け取りのご連絡・お支払いの確認・お店のサービス向上に利用します。<br>ご予約の処理のため、決済サービス(Square)・LINE・Googleに必要な範囲で預けますが、それ以外の目的で第三者に提供することはありません(法令に基づく場合を除く)。<br>内容の確認・訂正・削除をご希望の方は、LINEのトークでお知らせください。</p>
+      <p class="hint" style="margin:10px 0 0">ご入力いただいたお名前とLINEの情報は、ご予約の受付・お受け取りのご連絡・お支払いの確認・お店のサービス向上に利用します。<br>ご予約の処理のため、決済サービス(Square)・LINE・Googleに必要な範囲で預けますが、それ以外の目的で第三者に提供することはありません(法令に基づく場合を除く)。<br>内容の確認・訂正・削除をご希望の方は、LINEのトークでお知らせください。</p>
     </div>
 
     <div class="card">
@@ -135,7 +134,6 @@
     <div class="card">
       <dl>
         <dt>お名前</dt><dd id="c-name"></dd>
-        <dt>電話番号</dt><dd id="c-phone"></dd>
         <dt>お受け取り</dt><dd id="c-pickup"></dd>
         <dt>ご注文内容</dt><dd id="c-detail"></dd>
         <dt>合計</dt><dd id="c-total"></dd>
@@ -541,7 +539,6 @@ function fillIfEmpty(id, value) {
 function applyProfile() {
   if (!profile) return;
   fillIfEmpty('name', profile.name);
-  fillIfEmpty('phone', profile.phone);
   const friend = $('friend');
   friend.textContent = '';
   if (!profile.isFriend) {
@@ -621,14 +618,6 @@ function updateButtons() {
 
 // ----- 入力の読み取りと送信 -----
 
-// 全角の数字・記号を半角にそろえる(電話番号用)
-function normalizePhone(v) {
-  return v.trim()
-    .replace(/[０-９（）＋]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
-    .replace(/[ー－―‐−]/g, '-')
-    .replace(/　/g, ' ');
-}
-
 function readOrder() {
   const items = {};
   const slices = {};
@@ -640,7 +629,6 @@ function readOrder() {
   });
   return {
     name: $('name').value.trim(),
-    phone: normalizePhone($('phone').value),
     date: state.date,
     time: state.time,
     items: items,
@@ -650,7 +638,6 @@ function readOrder() {
 
 function checkOrder(order) {
   if (!order.name) return 'お名前をご入力ください。';
-  if (!/^[0-9+\-() ]{9,20}$/.test(order.phone)) return '電話番号を正しくご入力ください。';
   if (!order.date) return '受取日をお選びください。';
   if (Object.keys(order.items).length === 0) return '商品をお選びください。';
   if (!order.time) return '受取時間をお選びください。';
@@ -678,7 +665,6 @@ async function toConfirm() {
   order.requestId = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   pendingOrder = order;
   $('c-name').textContent = order.name + ' 様';
-  $('c-phone').textContent = order.phone;
   $('c-pickup').textContent = order.date + ' ' + order.time;
   $('c-detail').textContent = detailLines();
   $('c-total').textContent = total().toLocaleString() + '円';
@@ -732,7 +718,7 @@ async function submitOrder() {
   if (res.error === 'busy') { setError('confirm-error', res.message); return; }
   if (res.error === 'not_friend') {
     // 画面を開いたときは友だちだった(または本人情報を読めなかった)が、送信時には友だちでなかった
-    profile = Object.assign({ name: '', phone: '', lastOrder: null }, profile, { isFriend: false });
+    profile = Object.assign({ name: '', lastOrder: null }, profile, { isFriend: false });
     applyProfile();
     showView('form');
     setError('error', res.message);
