@@ -402,6 +402,11 @@ function pickupTimes() {
     if (g.sliceTimes && g.products.some(function (n) { return slicedOf(n) > 0; })) return g.sliceTimes;
     return g.times;
   }
+  // 天然酵母以外の食パンなど、スライスすると受取が遅くなる商品(古い商品情報には無いので、無ければ飛ばす)
+  const late = catalog.lateSlice || [];
+  for (let i = late.length - 1; i >= 0; i--) {
+    if (slicedOf(late[i].product) > 0) return late[i].times;
+  }
   return catalog.times.general;
 }
 
